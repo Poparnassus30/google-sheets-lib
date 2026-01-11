@@ -1,0 +1,20 @@
+# Fichiers temporaires ou de sauvegarde
+appsscript.json.bak
+*.bak
+*.tmp
+*.log
+
+# Fichier de liaison clasp (ne pas versionner en repo public)
+.clasp.json
+
+# Dossiers Node (si un jour tu ajoutes du tooling)
+node_modules/
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Fichiers système
+desktop.ini
