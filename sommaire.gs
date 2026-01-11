@@ -1,4 +1,9 @@
 
+function getSheetName() {
+  //Renvoie le nom de l'onglet dans laquel la formule est appelé
+  return SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName();
+}
+
 function SommaireMiseAJour() {
   /*
     Creer une tableau Sommaire dans l'onglet qui porte le nom A2-SOMMAIRE (voir ligne 8)
