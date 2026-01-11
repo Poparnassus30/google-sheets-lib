@@ -1,25 +1,24 @@
 function getSheetName() {
-  // Renvoie le nom de l'onglet dans laquelle la formule est appelée
   return SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName();
 }
 
 /**
  * Met à jour (ou crée) le tableau Sommaire dans un onglet cible.
  *
+ * - Crée l'onglet si absent
+ * - Met à jour les lignes selon les onglets existants
+ * - Conserve les colonnes: IMPRESSION PDF / DE / A si déjà remplies
+ *
  * @param {Object} opts Options de configuration (facultatif)
- * @param {string} opts.targetSheetName Nom de l'onglet sommaire (ex: "A2-SOMMAIRE" ou "A2_SOMMAIRE")
- * @param {number} opts.startRow Ligne de départ pour écrire les données (défaut: 9)
+ * @param {string} opts.targetSheetName Nom de l'onglet sommaire (défaut: "A2-SOMMAIRE")
+ * @param {number} opts.startRow Ligne de départ (défaut: 9)
  * @param {number} opts.startColumn Colonne de départ (défaut: 1)
- * @param {number} opts.rowsPerPage Nombre de lignes par page (approx) (défaut: 50)
- * @param {number} opts.sleepMs Pause entre écritures (défaut: 200) (peut être 0 si tu veux accélérer)
+ * @param {number} opts.rowsPerPage Taille approx d'une page (défaut: 50)
+ * @param {number} opts.sleepMs Pause entre écritures (défaut: 0)
+ * @param {boolean} opts.clearOldRows Effacer les anciennes lignes du sommaire (défaut: true)
  */
 function SommaireMiseAJour(opts) {
-  /*
-    Crée un tableau Sommaire dans l'onglet cible.
-    Ce tableau liste tous les onglets du classeur avec leurs noms et dimensions (lignes/colonnes),
-    ainsi que des colonnes "IMPRESSION PDF", "DE", "A" conservées si déjà existantes.
-  */
-  Logger.log("Début du script");
+  Logger.log("Début du script SommaireMiseAJour");
 
   opts = opts || {};
   const cfg = {
@@ -27,41 +26,78 @@ function SommaireMiseAJour(opts) {
     startRow: 9,
     startColumn: 1,
     rowsPerPage: 50,
-    sleepMs: 200,
+    sleepMs: 0,
+    clearOldRows: true,
     ...opts
   };
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const targetSheetName = cfg.targetSheetName;
-  const targetSheet = ss.getSheetByName(targetSheetName);
 
-  // Vérifie si l'onglet existe
+  // 1) Crée l'onglet sommaire si absent
+  let targetSheet = ss.getSheetByName(cfg.targetSheetName);
   if (!targetSheet) {
-    throw new Error(`La feuille "${targetSheetName}" n'existe pas. Veuillez la créer avant d'exécuter la fonction.`);
+    targetSheet = ss.insertSheet(cfg.targetSheetName);
+    Logger.log(`Onglet sommaire créé: ${cfg.targetSheetName}`);
   }
 
-  // Filtre les feuilles "réelles" (évite certains objets/feuilles bizarres)
-  const sheets = ss.getSheets().filter(sheet => {
+  const startRow = cfg.startRow;
+  const startColumn = cfg.startColumn;
+  const rowsPerPage = cfg.rowsPerPage;
+  const sleepMs = Number(cfg.sleepMs) || 0;
+  const sleep = () => { if (sleepMs > 0) Utilities.sleep(sleepMs); };
+
+  // 2) Liste des onglets "réels" (exclut le sommaire lui-même)
+  const sheets = ss.getSheets().filter(sh => {
+    if (sh.getName() === cfg.targetSheetName) return false;
     try {
-      return sheet.getLastRow() > 0 || sheet.getLastColumn() > 0;
+      return sh.getLastRow() > 0 || sh.getLastColumn() > 0;
     } catch (e) {
-      console.log(`Feuille ignorée (probablement un graphique) : ${sheet.getName()}`);
-      Logger.log(`Erreur lors du traitement de ${sheet.getName()} : ${e.message}`);
+      Logger.log(`Feuille ignorée: ${sh.getName()} (erreur: ${e.message})`);
       return false;
     }
   });
 
-  // Ligne et colonne de départ pour effacer et écrire
-  const startRow = cfg.startRow;
-  const startColumn = cfg.startColumn;
+  // 3) Conserver les anciennes valeurs (IMPRESSION PDF / DE / A) via un index par nom d'onglet
+  // On lit l'ancien tableau si existant
+  const oldMap = {}; // { sheetName: { pdf, de, a } }
 
-  // Taille approximative d'une page imprimable (en nombre de lignes)
-  const rowsPerPage = cfg.rowsPerPage;
+  const lastRow = targetSheet.getLastRow();
+  const headerRow = startRow;
 
-  const sleepMs = Number(cfg.sleepMs) || 0;
-  const sleep = () => { if (sleepMs > 0) Utilities.sleep(sleepMs); };
+  if (lastRow > headerRow) {
+    const dataStartRow = headerRow + 1;
+    const numRows = lastRow - headerRow;
 
-  // Ajoute les en-têtes
+    // Colonnes: A..H (8 colonnes)
+    const oldValues = targetSheet
+      .getRange(dataStartRow, startColumn, numRows, 8)
+      .getValues();
+
+    // oldValues[i] = [NOM, PDF, NBPAGES, PAGE, DE, A, LIGNE, COL]
+    oldValues.forEach(row => {
+      const name = row[0];
+      if (!name) return;
+      oldMap[name] = {
+        pdf: row[1],
+        de: row[4],
+        a: row[5]
+      };
+    });
+  }
+
+  // 4) Optionnel : nettoyage de la zone existante (sauf si tu veux garder des lignes fantômes)
+  if (cfg.clearOldRows) {
+    // On efface tout sous l'entête (A..H)
+    // Largeur 8 colonnes
+    const maxRowsToClear = Math.max(0, targetSheet.getMaxRows() - startRow);
+    if (maxRowsToClear > 0) {
+      targetSheet
+        .getRange(startRow, startColumn, maxRowsToClear, 8)
+        .clear({ contentsOnly: true, formatsOnly: false });
+    }
+  }
+
+  // 5) Écrit l'entête
   const headerRange = targetSheet.getRange(startRow, startColumn, 1, 8);
   headerRange.setValues([[
     "NOM DE L'ONGLET",
@@ -78,63 +114,63 @@ function SommaireMiseAJour(opts) {
   headerRange.setBackground("#f4f4f4");
   headerRange.setHorizontalAlignment("center");
 
-  // Parcourt chaque onglet et calcule les données
-  sheets.forEach((sheet, index) => {
-    const currentRow = startRow + index + 1;
+  // 6) Construit les lignes à écrire en mémoire (plus rapide que setValue ligne par ligne)
+  const rows = sheets.map(sh => {
+    const name = sh.getName();
+    const keep = oldMap[name] || {};
 
-    // Valeurs existantes (conserve si déjà remplies)
-    const existingPdfValue = targetSheet.getRange(currentRow, startColumn + 1).getValue();
-    const existingDeValue = targetSheet.getRange(currentRow, startColumn + 4).getValue();
-    const existingAValue = targetSheet.getRange(currentRow, startColumn + 5).getValue();
+    const nbPages = Math.ceil(sh.getLastRow() / rowsPerPage);
 
-    // Nom onglet
-    targetSheet.getRange(currentRow, startColumn).setValue(sheet.getName());
-    sleep();
+    const pdf = (keep.pdf && String(keep.pdf).trim() !== "") ? keep.pdf : "non";
+    const de = (keep.de && String(keep.de).trim() !== "") ? keep.de : "";
+    const a = (keep.a && String(keep.a).trim() !== "") ? keep.a : "";
 
-    // Nombre de pages approx
-    targetSheet.getRange(currentRow, startColumn + 2).setValue(
-      Math.ceil(sheet.getLastRow() / rowsPerPage)
-    );
-    sleep();
-
-    // Impression PDF (oui/non)
-    targetSheet.getRange(currentRow, startColumn + 1).setValue(existingPdfValue || "non");
-    sleep();
-
-    // DE / A (conserve si présent)
-    targetSheet.getRange(currentRow, startColumn + 4).setValue(existingDeValue || "");
-    sleep();
-    targetSheet.getRange(currentRow, startColumn + 5).setValue(existingAValue || "");
-    sleep();
-
-    // Dimensions
-    targetSheet.getRange(currentRow, startColumn + 6).setValue(sheet.getLastRow());
-    targetSheet.getRange(currentRow, startColumn + 7).setValue(sheet.getLastColumn());
-
-    // Formule "PAGE DE _ A _"
-    const formula = `=CONCATENATE("Page "; ${targetSheet.getRange(currentRow, startColumn + 4).getA1Notation()}; " à "; ${targetSheet.getRange(currentRow, startColumn + 5).getA1Notation()})`;
-    sleep();
-    targetSheet.getRange(currentRow, startColumn + 3).setFormula(formula);
+    // colonne "PAGE DE _ A _" = formule, on la mettra après (range.setFormulas)
+    return [
+      name,
+      pdf,
+      nbPages,
+      "",  // formule ensuite
+      de,
+      a,
+      sh.getLastRow(),
+      sh.getLastColumn()
+    ];
   });
 
-  // Menu déroulant oui/non dans la colonne IMPRESSION PDF
-  const dropdownRange = targetSheet.getRange(startRow + 1, startColumn + 1, sheets.length, 1);
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(["oui", "non"], true)
-    .setAllowInvalid(false)
-    .build();
-  dropdownRange.setDataValidation(rule);
+  // 7) Écrit toutes les lignes d’un coup
+  if (rows.length > 0) {
+    const dataRange = targetSheet.getRange(startRow + 1, startColumn, rows.length, 8);
+    dataRange.setValues(rows);
+    sleep();
 
-  // Bordures + alignement
-  const dataRange = targetSheet.getRange(
-    startRow,
-    startColumn,
-    sheets.length + 1,
-    8
-  );
-  dataRange.setBorder(true, true, true, true, true, true);
-  dataRange.setHorizontalAlignment("center");
+    // 8) Ajoute les formules "PAGE DE _ A _" (colonne D = index 4ème)
+    const formulas = rows.map((_, i) => {
+      const r = startRow + 1 + i;
+      const deCell = targetSheet.getRange(r, startColumn + 4).getA1Notation(); // col E
+      const aCell  = targetSheet.getRange(r, startColumn + 5).getA1Notation(); // col F
+      return [`=CONCATENATE("Page "; ${deCell}; " à "; ${aCell})`];
+    });
+
+    targetSheet.getRange(startRow + 1, startColumn + 3, rows.length, 1).setFormulas(formulas);
+    sleep();
+
+    // 9) Dropdown oui/non sur la colonne IMPRESSION PDF (col B)
+    const dropdownRange = targetSheet.getRange(startRow + 1, startColumn + 1, rows.length, 1);
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["oui", "non"], true)
+      .setAllowInvalid(false)
+      .build();
+    dropdownRange.setDataValidation(rule);
+
+    // 10) Bordures + alignement
+    const fullRange = targetSheet.getRange(startRow, startColumn, rows.length + 1, 8);
+    fullRange.setBorder(true, true, true, true, true, true);
+    fullRange.setHorizontalAlignment("center");
+  } else {
+    Logger.log("Aucun onglet à lister (hors sommaire).");
+  }
 
   SpreadsheetApp.flush();
-  Logger.log("Script terminé avec succès !");
+  Logger.log("SommaireMiseAJour terminé avec succès !");
 }
